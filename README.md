@@ -37,9 +37,31 @@ The app creates the `chatapp` database and `users` and `messages` collections au
 
 ## Running the App
 
+### Option 1: Both together (single terminal)
+
 ```bash
 npm install
 npm start
+```
+
+### Option 2: Separate terminals (recommended for development)
+
+First, install dependencies once:
+
+```bash
+npm install
+```
+
+Then open two terminals in the project root:
+
+**Terminal 1 — Backend:**
+```bash
+npm run server
+```
+
+**Terminal 2 — Frontend:**
+```bash
+npm run client
 ```
 
 This starts:
