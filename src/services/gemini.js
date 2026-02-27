@@ -1,9 +1,10 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { CSV_TOOL_DECLARATIONS } from './csvTools';
+import { YOUTUBE_TOOL_DECLARATIONS } from './youtubeTools';
 
 const genAI = new GoogleGenerativeAI(process.env.REACT_APP_GEMINI_API_KEY || '');
 
-const MODEL = 'gemini-2.0-flash';
+const MODEL = 'gemini-2.5-flash';
 
 const SEARCH_TOOL = { googleSearch: {} };
 const CODE_EXEC_TOOL = { codeExecution: {} };
@@ -12,7 +13,7 @@ export const CODE_KEYWORDS = /\b(plot|chart|graph|analyz|statistic|regression|co
 
 let cachedPrompt = null;
 
-async function loadSystemPrompt() {
+async function loadSystemPrompt(userIdentity) {
   if (cachedPrompt) return cachedPrompt;
   try {
     const res = await fetch('/prompt_chat.txt');
@@ -191,4 +192,66 @@ export const chatWithCsvTools = async (history, newMessage, csvHeaders, executeF
   }
 
   return { text: response.text(), charts, toolCalls };
+};
+
+// ── Function-calling chat for YouTube JSON tools ─────────────────────────────
+
+export const chatWithYouTubeTools = async (history, newMessage, channelData, executeFn) => {
+  const systemInstruction = await loadSystemPrompt();
+  const model = genAI.getGenerativeModel({
+    model: MODEL,
+    tools: [{ functionDeclarations: YOUTUBE_TOOL_DECLARATIONS }],
+  });
+
+  const baseHistory = history.map((m) => ({
+    role: m.role === 'user' ? 'user' : 'model',
+    parts: [{ text: m.content || '' }],
+  }));
+
+  const chatHistory = systemInstruction
+    ? [
+        {
+          role: 'user',
+          parts: [{ text: `Follow these instructions in every response:\n\n${systemInstruction}` }],
+        },
+        { role: 'model', parts: [{ text: "Got it! I'll follow those instructions." }] },
+        ...baseHistory,
+      ]
+    : baseHistory;
+
+  const chat = model.startChat({ history: chatHistory });
+
+  const jsonContext = channelData?.videos?.length
+    ? `[YouTube channel JSON loaded: ${channelData.videos.length} videos. Fields: videoId, title, description, url, thumbnailUrl, duration, durationSeconds, publishedAt, viewCount, likeCount, commentCount, transcript.]\n\n`
+    : '';
+  const msgWithContext = jsonContext + newMessage;
+
+  let response = (await chat.sendMessage(msgWithContext)).response;
+  const charts = [];
+  const toolCalls = [];
+  const images = [];
+  const videoCards = [];
+
+  for (let round = 0; round < 5; round++) {
+    const parts = response.candidates?.[0]?.content?.parts || [];
+    const funcCall = parts.find((p) => p.functionCall);
+    if (!funcCall) break;
+
+    const { name, args } = funcCall.functionCall;
+    const toolResult = executeFn(name, args);
+
+    toolCalls.push({ name, args, result: toolResult });
+
+    if (toolResult?._chartType) charts.push(toolResult);
+    if (toolResult?._type === 'image') images.push(toolResult);
+    if (toolResult?._type === 'video_card') videoCards.push(toolResult);
+
+    response = (
+      await chat.sendMessage([
+        { functionResponse: { name, response: { result: toolResult } } },
+      ])
+    ).response;
+  }
+
+  return { text: response.text(), charts, toolCalls, images, videoCards };
 };
